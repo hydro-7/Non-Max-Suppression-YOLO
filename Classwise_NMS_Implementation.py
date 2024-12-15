@@ -10,8 +10,25 @@ import torchvision
 import matplotlib
 from matplotlib import pyplot as plt
 import cv2
-from torchvision.ops.boxes import box_iou
 
+
+# img = cv2.imread("Zentree_Labs\stop.jpg")
+# img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+# stop_data = cv2.CascadeClassifier('Zentree_Labs\stop_data.xml')
+# found = stop_data.detectMultiScale(img_gray, minSize =(20, 20))   
+# amount_found = len(found)
+# if amount_found != 0:
+#     for (x, y, width, height) in found:
+#         X = x, Y = y, W = width, H = height
+#         cv2.rectangle(img_rgb, (x, y), 
+#                       (x + height, y + width), 
+#                       (0, 255, 0), 5)
+        
+# plt.subplot(1, 1, 1)
+# plt.imshow(img_rgb)
+# plt.show()
+          
 
 def xywh2xyxy(x):
     """
@@ -30,80 +47,110 @@ def xywh2xyxy(x):
     y[..., 3] = x[..., 1] + x[..., 3] / 2  # bottom right y
     return y
 
+# matrx = [[1.], [0., 1., 2.], [1., 1., 4., 4., 7., 8., 9.]]
+# prediction =  torch.randn(1,8,7) # tensor of shape (batch_size, num_classes + 4 + num_masks, 8400)
 
+prediction =  torch.rand(1,7,10) # tensor of shape (batch_size, num_classes + 4 + num_masks, 8400)
 
-def custom_nms(bboxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -> torch.Tensor:
-    order = torch.argsort(-scores)
-    indices = torch.arange(bboxes.shape[0])
-    keep = torch.ones_like(indices, dtype=torch.bool)
-    for i in indices:
-        if keep[i]:
-            bbox = bboxes[order[i]]
-            iou = box_iou(bbox[None,...],(bboxes[order[i + 1:]]) * keep[i + 1:][...,None])
-            overlapped = torch.nonzero(iou > iou_threshold)
-            keep[overlapped + i + 1] = 0
-    return order[keep]
+print(prediction)
+print("\n")
+# print(prediction[0])
 
+bs = prediction.shape[0]  # batch size
+nc = prediction.shape[1] - 4 # number of classes
 
-
-prediction =  torch.rand(1,7,8400)
-classes = None
 agnostic=False
-conf_thresh = 0.0
-iou_thres = 0.0
+conf_thresh = 0.5
+iou_thres = .0
 max_det = 30000
-max_nms = 500
-max_wh = 7680
-
-bs = prediction.shape[0]  # batch size (BCN, i.e. 1,84,6300)
-nc = (prediction.shape[1] - 4)  # number of classes
-nm = prediction.shape[1] - nc - 4  # number of masks
 mi = 4 + nc  # mask start index
-xc = prediction[:, 4:mi].amax(1) > conf_thresh  # candidates
 
-prediction = prediction.transpose(-1, -2)  # shape(1,84,6300) to shape(1,6300,84)
+# xc = prediction[:, :, 4:mi]
+# xc1 = prediction[:, :, 4:mi].amax(1) > conf_thresh
+# xc = prediction[:, 4:mi]
+xc = prediction[:, 4:mi].amax(1) > conf_thresh
 
-output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
-for xi, x in enumerate(prediction):  # image index, image inference
-    
-    x = x[xc[xi]]  # confidence
+max_wh = 7680  # (pixels) maximum box width and height
+max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()
 
+
+
+output = [torch.zeros((0, 6), device=prediction.device)] * bs
+
+for xi, x in enumerate(prediction): 
+
+    x = x.transpose(0, -1)[xc[xi]]
+
+
+    # If none remain process next image
     if not x.shape[0]:
-        continue
+        continue 
+    box, cls = x[:, :4], x[:, 4:]
 
-    box, cls, mask = x.split((4, nc, nm), 1)
 
-    
     conf, j = cls.max(1, keepdim=True)
-    x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thresh]
+    x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thresh]
 
-    # Filter by class
-    if classes is not None:
-        x = x[(x[:, 5:6] == classes).any(1)]
 
-    # Check shape
     n = x.shape[0]  # number of boxes
     if not n:  # no boxes
         continue
-    if n > max_nms:  # excess boxes
-        x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence and remove excess boxes
 
-    print(f"x size : {x.size()}\n")
-    # print(f"x : {x}\n\n") # confidence threshold = 0 & iou_threshold = 0
+    x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence and remove excess boxes
+    x = x[x[:, 5].argsort(descending = True)]
+    print("x : \n")
+    print(x)
+    print("\n\n")
 
-    # Batched NMS
-    # c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
-    c = 0  # classes
-    scores = x[:, 4]  # scores
-    boxes = x[:, :4] + c  # boxes (offset by class)
-    # i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+    curridx = x[0, 5]
+
+    main = []
+    fin_ans = []
+
+    for i, xx in enumerate(x):    
+        if (xx[5] == curridx):
+            main.append(xx)
+
+        else:
+            print(f"Current index : {curridx} : \n")
+
+            tens_main = torch.stack(main)             
+            c = tens_main[:, 5:6] * (0 if agnostic else max_wh)  # classes
+            boxes, scores = tens_main[:, :4] + c, tens_main[:, 4]  # boxes (offset by class), scores
+            print(boxes)
+            print(c)
+            i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+            i = i[:max_det]  # limit detections
+
+            print(f"i vector : {i}\n")
+
+            for a in i:
+                fin_ans.append(tens_main[a])
+
+            main.clear()
+            curridx = xx[5]
+            main.append(xx)
+    
+    print(f"Current index : {curridx} : \n")
+
+    tens_main = torch.stack(main) 
+    c = tens_main[:, 5:6] * (0 if agnostic else max_wh)  # classes
+    boxes, scores = tens_main[:, :4] + c, tens_main[:, 4]  # boxes (offset by class), scores
+    print(boxes)
+    print(c)
     i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
-    # i = custom_nms(boxes, scores, iou_thres)  # NMS
-
     i = i[:max_det]  # limit detections
+    
+    print(f"i vector : {i}\n")
+    
+    for a in i:
+        fin_ans.append(tens_main[a])
 
+    # print(fin_ans)
+    # print("\n\n")
+    fin = torch.stack(fin_ans)
+    # print(fin)
 
-    output[xi] = x[i]
+    output[xi] = fin
 
-print(f"output size : {output[0].size()}")
-# print(f"output : {output}")
+print(output)
